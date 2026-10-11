@@ -1,0 +1,21 @@
+{
+  "input_dir": "input",
+  "output_dir": "output",
+  "preferences_file": "flat_shop_preferences.csv",
+  "payee_upi_id": "yourname@upi",
+  "payee_default_name": "YOUR SOCIETY NAME",
+  "upi_ver": "",
+  "upi_mode": "",
+  "upi_orgid": "",
+  "upi_mc": "",
+  "upi_mid": "",
+  "upi_mtid": "",
+  "upi_qr_medium": "",
+  "caption_prefilled": "Scan to Pay Full Amount\nRs.{amount}",
+  "caption_custom": "Scan to Pay Custom Amount",
+  "caption_both_top": [
+    "Pay Custom",
+    "Amount"
+  ],
+  "remarks_suffix": "Maintenance"
+}

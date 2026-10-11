@@ -1,0 +1,33 @@
+# Local config (copy config.json.sample to config.json)
+config.json
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Generated bills and input bills (contain residents' data); keep the READMEs
+output/*
+!output/README.txt
+input/*
+!input/README.txt
+
+# Environment / secrets
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.log
+
+# Resident flat list
+flat_shop_preferences.csv
