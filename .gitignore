@@ -31,3 +31,6 @@ Thumbs.db
 
 # Resident flat list
 flat_shop_preferences.csv
+
+# Backups
+backup/

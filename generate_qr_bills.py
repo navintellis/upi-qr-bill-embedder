@@ -110,6 +110,8 @@ CAPTION_PREFILLED = APP_CONFIG["caption_prefilled"]
 CAPTION_CUSTOM = APP_CONFIG["caption_custom"]
 CAPTION_BOTH_TOP = APP_CONFIG["caption_both_top"]
 REMARKS_SUFFIX = APP_CONFIG["remarks_suffix"]
+# Only maintenance bills carry a "Bill for the Period ..." line (-> quarter / FY).
+IS_MAINTENANCE = REMARKS_SUFFIX.strip().lower() == "maintenance"
 
 MONTHS = {m: i + 1 for i, m in enumerate(
     ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -164,7 +166,7 @@ def normalize_key(flat_no):
 # --------------------------------------------------------------------------
 # Bill field extraction (per page)
 # --------------------------------------------------------------------------
-def extract_fields(page_text):
+def extract_fields(page_text, maintenance=True):
     if not page_text:
         raise ValueError("Empty page text (is this a scanned/image-only PDF?).")
 
@@ -179,40 +181,55 @@ def extract_fields(page_text):
     if not flat_no:
         raise ValueError('Could not find a "Flat No." line on this page.')
 
-    m_total = re.search(r'Grand Total\s*:\s*([\d,]+\.\d{2})', page_text)
+    # Generic: optional sign / parentheses / Cr-Dr, with or without decimals,
+    # e.g. "Grand Total : 1,234.00", "Grand Total : -12,117.00", "Grand Total : (500.00)".
+    m_total = re.search(
+        r'Grand\s*Total\s*:?\s*(\(?)\s*(-|\u2212)?\s*(?:Rs\.?|\u20b9)?\s*(-)?\s*'
+        r'(\d[\d,]*(?:\.\d+)?)\s*(\)?)\s*(CR|DR)?\b',
+        page_text, re.IGNORECASE
+    )
     if not m_total:
         raise ValueError('Could not find a "Grand Total :" line on this page.')
-    amount = m_total.group(1).replace(',', '')
+    paren, neg1, neg2, number, _close, crdr = m_total.groups()
+    value = float(number.replace(',', ''))
+    is_credit = bool(paren or neg1 or neg2 or (crdr and crdr.upper() == 'CR'))
+    if is_credit and value == 0:
+        is_credit = False
+    # Credit balance: nothing is payable, so the amount is not usable in a QR.
+    amount = f"{value:.2f}"
 
-    m_period = re.search(
-        r'Bill for the Period\s+([A-Za-z]+)-(\d{4})\s+to\s+([A-Za-z]+)-(\d{4})',
-        page_text
-    )
-    if not m_period:
-        raise ValueError('Could not find a "Bill for the Period ..." line on this page.')
-    start_mon, start_year, _end_mon, _end_year = m_period.groups()
+    quarter = fy_start = fy_end = None
+    if maintenance:
+        m_period = re.search(
+            r'Bill for the Period\s+([A-Za-z]+)-(\d{4})\s+to\s+([A-Za-z]+)-(\d{4})',
+            page_text
+        )
+        if not m_period:
+            raise ValueError('Could not find a "Bill for the Period ..." line on this page.')
+        start_mon, start_year, _end_mon, _end_year = m_period.groups()
 
-    start_month_num = MONTHS[start_mon]
-    start_year_num = int(start_year)
+        start_month_num = MONTHS[start_mon]
+        start_year_num = int(start_year)
 
-    if start_month_num in (4, 5, 6):
-        quarter = 1
-    elif start_month_num in (7, 8, 9):
-        quarter = 2
-    elif start_month_num in (10, 11, 12):
-        quarter = 3
-    else:
-        quarter = 4
+        if start_month_num in (4, 5, 6):
+            quarter = 1
+        elif start_month_num in (7, 8, 9):
+            quarter = 2
+        elif start_month_num in (10, 11, 12):
+            quarter = 3
+        else:
+            quarter = 4
 
-    if start_month_num >= 4:
-        fy_start, fy_end = start_year_num, start_year_num + 1
-    else:
-        fy_start, fy_end = start_year_num - 1, start_year_num
+        if start_month_num >= 4:
+            fy_start, fy_end = start_year_num, start_year_num + 1
+        else:
+            fy_start, fy_end = start_year_num - 1, start_year_num
 
     return {
         'society_name': society_name,
         'flat_no': flat_no,
         'amount': amount,
+        'is_credit': is_credit,
         'quarter': quarter,
         'fy_start': fy_start,
         'fy_end': fy_end,
@@ -365,7 +382,7 @@ def main():
 
         for i, page_text in enumerate(page_texts):
             try:
-                fields = extract_fields(page_text)
+                fields = extract_fields(page_text, IS_MAINTENANCE)
             except ValueError as e:
                 errors.append(f"{pdf_path.name} page {i + 1}: {e}")
                 print(f"  [skip] page {i + 1}: {e}")
@@ -374,11 +391,24 @@ def main():
             flat_no = fields['flat_no']
             key = normalize_key(flat_no)
             mode = preferences.get(key, 'PREFILLED')
+            if fields['is_credit'] or float(fields['amount']) <= 0:
+                # Nothing due (credit/zero balance): don't prefill an amount.
+                if mode != 'CUSTOM_AMOUNT':
+                    print(f"  [note] Flat {flat_no}: credit/zero balance "
+                          f"-> custom-amount QR only")
+                mode = 'CUSTOM_AMOUNT'
 
-            remarks = (
-                f"{flat_no} Q{fields['quarter']} "
-                f"{fields['fy_start']}-{fields['fy_end']} {REMARKS_SUFFIX}"
-            )
+            if IS_MAINTENANCE:
+                remarks = (
+                    f"{flat_no} Q{fields['quarter']} "
+                    f"{fields['fy_start']}-{fields['fy_end']} {REMARKS_SUFFIX}"
+                )
+                period_part = (
+                    f"Q{fields['quarter']}_{fields['fy_start']}-{fields['fy_end']}"
+                )
+            else:
+                remarks = f"{flat_no} {REMARKS_SUFFIX}"
+                period_part = sanitize_for_filename(REMARKS_SUFFIX)
             payee_name = PAYEE_DEFAULT_NAME or fields['society_name']
 
             def uri_for(amount):
@@ -421,8 +451,7 @@ def main():
 
             out_name = (
                 f"{sanitize_for_filename(flat_no)}_"
-                f"Q{fields['quarter']}_"
-                f"{fields['fy_start']}-{fields['fy_end']}_"
+                f"{period_part}_"
                 f"Rashi_Heights_maintenance_bill.pdf"
             )
             out_path = unique_path(out_dir / out_name)
